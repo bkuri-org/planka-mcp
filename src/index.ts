@@ -13,6 +13,7 @@ import * as labels from "./operations/labels.js";
 import * as lists from "./operations/lists.js";
 import * as projects from "./operations/projects.js";
 import * as tasks from "./operations/tasks.js";
+import * as attachments from "./operations/attachments.js";
 
 // Import custom tools
 import { createCardWithTasks, getBoardSummary, getCardDetails } from "./tools/index.js";
@@ -747,6 +748,59 @@ server.tool(
       case "delete":
         if (!args.id) throw new Error("id is required for delete action");
         result = await boardMemberships.deleteBoardMembership(args.id);
+        break;
+
+      default:
+        throw new Error(`Unknown action: ${args.action}`);
+    }
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    };
+  }
+);
+
+// 9. Attachment Manager
+server.tool(
+  "mcp_kanban_attachment_manager",
+  "Manage card attachments — upload, update, delete, get download URL",
+  {
+    action: z
+      .enum(["list", "get_url", "update", "delete"])
+      .describe("The action to perform"),
+    id: z.string().optional().describe("Attachment ID (for update/delete/get_url)"),
+    cardId: z.string().optional().describe("Card ID (for list)"),
+    filename: z.string().optional().describe("Filename (for get_url)"),
+    name: z.string().optional().describe("New name for the attachment (for update)"),
+  },
+  async (args) => {
+    let result: unknown;
+    switch (args.action) {
+      case "list":
+        if (!args.cardId)
+          throw new Error("cardId is required for list action");
+        {
+          // Fetch card and extract attachments from included data
+          const card = await cards.getCard(args.cardId);
+          result = attachments.extractAttachmentsFromCard(card as Record<string, unknown>);
+        }
+        break;
+
+      case "get_url":
+        if (!args.id || !args.filename)
+          throw new Error("id and filename are required for get_url action");
+        result = attachments.getAttachmentUrl(args.id, args.filename);
+        break;
+
+      case "update":
+        if (!args.id || !args.name)
+          throw new Error("id and name are required for update action");
+        result = await attachments.updateAttachment(args.id, { name: args.name });
+        break;
+
+      case "delete":
+        if (!args.id)
+          throw new Error("id is required for delete action");
+        result = await attachments.deleteAttachment(args.id);
         break;
 
       default:
