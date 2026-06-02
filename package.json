@@ -1,0 +1,37 @@
+{
+  "name": "@bkuri-org/planka-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Planka kanban boards — forked and maintained by bkuri-org",
+  "license": "MIT",
+  "author": "bkuri",
+  "homepage": "https://github.com/bkuri-org/planka-mcp",
+  "bugs": "https://github.com/bkuri-org/planka-mcp/issues",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bkuri-org/planka-mcp.git"
+  },
+  "type": "module",
+  "bin": {
+    "planka-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js",
+    "watch": "tsc --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "universal-user-agent": "^7.0.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "shx": "^0.3.4",
+    "typescript": "^5.8.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
