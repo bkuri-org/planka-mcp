@@ -45,17 +45,54 @@ export interface UploadAttachmentOptions {
     name?: string;
 }
 
+export interface UploadTextOptions {
+    cardId: string;
+    content: string;
+    filename: string;
+}
+
 /**
  * Upload a file as a card attachment
  */
 export async function uploadAttachment(options: UploadAttachmentOptions): Promise<PlankaAttachment> {
     const formData = new FormData();
-    formData.append("file", options.file, options.name || options.file.name);
-    const response = await plankaRequest(`/api/cards/${options.cardId}/attachments`, {
+    const filename = options.name || options.file.name;
+    formData.append("type", "file");
+    formData.append("name", filename);
+    formData.append("file", options.file, filename);
+
+    // Bypass plankaRequest for multipart — use raw fetch
+    const baseUrl = process.env.PLANKA_BASE_URL || "http://localhost:3000";
+    const normalizedBaseUrl = baseUrl.endsWith("/api") ? baseUrl.slice(0, -4) : baseUrl;
+
+    // Authenticate
+    const authUrl = `${normalizedBaseUrl}/api/access-tokens`;
+    const email = process.env.PLANKA_AGENT_EMAIL || "";
+    const password = process.env.PLANKA_AGENT_PASSWORD || "";
+    const authResp = await fetch(authUrl, {
         method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({emailOrUsername: email, password}),
+    });
+    const authData = await authResp.json();
+    const token = authData.item;
+    if (!token) throw new Error(`Auth failed: ${JSON.stringify(authData)}`);
+
+    // Upload
+    const url = `${normalizedBaseUrl}/api/cards/${options.cardId}/attachments`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {"Authorization": `Bearer ${token}`},
         body: formData,
     });
-    return response.item as unknown as PlankaAttachment;
+
+    if (!response.ok) {
+        const errorBody = await response.json().catch(() => ({}));
+        throw new Error(`Upload failed (${response.status}): ${JSON.stringify(errorBody)}`);
+    }
+
+    const data = await response.json();
+    return data.item as unknown as PlankaAttachment;
 }
 
 /**
@@ -67,6 +104,18 @@ export async function updateAttachment(id: string, options: { name: string }): P
         body: { name: options.name },
     });
     return response.item as unknown as PlankaAttachment;
+}
+
+/**
+ * Upload text content as a file attachment
+ *
+ * Creates a Blob from the text string, wraps it in a File, then uploads
+ * via multipart/form-data. Useful for transcripts, notes, etc.
+ */
+export async function uploadText(options: UploadTextOptions): Promise<PlankaAttachment> {
+    const blob = new Blob([options.content], { type: "text/plain;charset=utf-8" });
+    const file = new File([blob], options.filename, { type: "text/plain;charset=utf-8" });
+    return uploadAttachment({ cardId: options.cardId, file });
 }
 
 /**

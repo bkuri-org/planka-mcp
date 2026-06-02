@@ -762,19 +762,30 @@ server.tool(
 // 9. Attachment Manager
 server.tool(
   "mcp_kanban_attachment_manager",
-  "Manage card attachments — upload, update, delete, get download URL",
+  "Manage card attachments — upload text files, list, get download URL, update, delete",
   {
     action: z
-      .enum(["list", "get_url", "update", "delete"])
+      .enum(["upload_text", "list", "get_url", "update", "delete"])
       .describe("The action to perform"),
     id: z.string().optional().describe("Attachment ID (for update/delete/get_url)"),
-    cardId: z.string().optional().describe("Card ID (for list)"),
-    filename: z.string().optional().describe("Filename (for get_url)"),
+    cardId: z.string().optional().describe("Card ID (for upload_text/list)"),
+    filename: z.string().optional().describe("Filename, e.g. transcript.txt (for upload_text/get_url)"),
+    content: z.string().optional().describe("Text content to upload as file (for upload_text)"),
     name: z.string().optional().describe("New name for the attachment (for update)"),
   },
   async (args) => {
     let result: unknown;
     switch (args.action) {
+      case "upload_text":
+        if (!args.cardId || !args.content || !args.filename)
+          throw new Error("cardId, content, and filename are required for upload_text action");
+        result = await attachments.uploadText({
+          cardId: args.cardId,
+          content: args.content,
+          filename: args.filename,
+        });
+        break;
+
       case "list":
         if (!args.cardId)
           throw new Error("cardId is required for list action");
