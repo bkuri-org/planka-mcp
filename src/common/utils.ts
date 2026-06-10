@@ -18,6 +18,7 @@ export interface PlankaRequestOptions {
   headers?: Record<string, string>;
   body?: Record<string, unknown> | FormData;
   skipAuth?: boolean;
+  timeoutMs?: number;
 }
 
 export interface PlankaResponse {
@@ -131,6 +132,11 @@ export async function plankaRequest(path: string, options: PlankaRequestOptions 
     }
   }
 
+  // Default 30s timeout per request
+  const timeoutMs = options.timeoutMs ?? 30_000;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const response = await fetch(url, {
       method: options.method || "GET",
@@ -141,7 +147,10 @@ export async function plankaRequest(path: string, options: PlankaRequestOptions 
           ? JSON.stringify(options.body)
           : undefined,
       credentials: "include", // Include cookies for Planka authentication
+      signal: controller.signal,
     });
+
+    clearTimeout(timer);
 
     const responseBody = await parseResponseBody(response);
 
@@ -151,6 +160,7 @@ export async function plankaRequest(path: string, options: PlankaRequestOptions 
 
     return responseBody as PlankaResponse;
   } catch (error) {
+    clearTimeout(timer);
     if (error instanceof PlankaError || error instanceof Error && error.message.startsWith("Failed to get authentication token")) {
       throw error;
     }

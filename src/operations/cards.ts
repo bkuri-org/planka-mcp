@@ -2,6 +2,91 @@ import { z } from "zod";
 import { plankaRequest } from "../common/utils.js";
 import { PlankaCardSchema, PlankaCard, PlankaStopwatch } from "../common/types.js";
 
+// Cache: listId -> boardId (populated on demand, never expires within a session)
+const listToBoardCache: Record<string, string> = {};
+
+/**
+ * Resolve a listId to its boardId using the projects index.
+ * Populates listToBoardCache for all lists discovered.
+ * Falls back to iterating boards only if the list is not in any
+ * project's included boards (e.g. newly created board not yet indexed).
+ */
+export async function resolveBoardIdForList(listId: string): Promise<string | null> {
+  // Check cache first
+  if (listToBoardCache[listId]) {
+    return listToBoardCache[listId];
+  }
+
+  // GET /api/projects returns included.boards — no per-board requests needed
+  const projectsResponse = await plankaRequest(`/api/projects`);
+  if (
+    !projectsResponse ||
+    typeof projectsResponse !== "object" ||
+    !("included" in projectsResponse) ||
+    !projectsResponse.included
+  ) {
+    return null;
+  }
+
+  const included = projectsResponse.included;
+
+  // Check if boards are in included (projects index includes boards with projectId)
+  if ("boards" in included && Array.isArray(included.boards)) {
+    // The projects index doesn't include lists, so we need to fetch each board
+    // But this is still better than before — we only need to find which board
+    // contains this list. We parallelize the board fetches.
+    const boards = included.boards as Array<{ id: string; projectId: string }>;
+
+    // Fetch all boards in parallel to find the one containing this list
+    const boardResponses = await Promise.all(
+      boards.map((board) => plankaRequest(`/api/boards/${board.id}`))
+    );
+
+    for (const boardResponse of boardResponses) {
+      if (
+        !boardResponse ||
+        typeof boardResponse !== "object" ||
+        !("included" in boardResponse) ||
+        !boardResponse.included
+      ) {
+        continue;
+      }
+
+      const boardIncluded = boardResponse.included;
+      if ("lists" in boardIncluded && Array.isArray(boardIncluded.lists)) {
+        for (const list of boardIncluded.lists as Array<{ id: string }>) {
+          // Cache ALL list→board mappings we discover
+          listToBoardCache[list.id] = (boardResponse.item as { id: string })?.id ?? "";
+        }
+      }
+
+      if (listToBoardCache[listId]) {
+        return listToBoardCache[listId];
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Look up a listId's boardId from the cache (no API call).
+ */
+export function getCachedBoardId(listId: string): string | null {
+  return listToBoardCache[listId] ?? null;
+}
+
+/**
+ * Invalidate the list-to-board cache (e.g. after list creation/move).
+ */
+export function invalidateListToBoardCache(listId?: string): void {
+  if (listId) {
+    delete listToBoardCache[listId];
+  } else {
+    Object.keys(listToBoardCache).forEach((k) => delete listToBoardCache[k]);
+  }
+}
+
 // Schema definitions
 export const CreateCardSchema = z.object({
   listId: z.string().describe("List ID"),
@@ -104,66 +189,34 @@ export async function createCard(options: CreateCardInput): Promise<PlankaCard> 
 
 export async function getCards(listId: string): Promise<PlankaCard[]> {
   try {
-    // Get all projects which includes boards
-    const projectsResponse = await plankaRequest(`/api/projects`);
+    // Resolve listId -> boardId (cached after first lookup)
+    const boardId = await resolveBoardIdForList(listId);
+    if (!boardId) {
+      return [];
+    }
+
+    // Single API call: GET /api/boards/{boardId} returns included.cards
+    const boardResponse = await plankaRequest(`/api/boards/${boardId}`);
     if (
-      !projectsResponse ||
-      typeof projectsResponse !== "object" ||
-      !("included" in projectsResponse) ||
-      !projectsResponse.included ||
-      typeof projectsResponse.included !== "object"
+      !boardResponse ||
+      typeof boardResponse !== "object" ||
+      !("included" in boardResponse) ||
+      !boardResponse.included
     ) {
       return [];
     }
 
-    const included = projectsResponse.included;
-
-    // Get all boards
-    if (!("boards" in included) || !Array.isArray(included.boards)) {
+    const boardIncluded = boardResponse.included;
+    if (!("cards" in boardIncluded) || !Array.isArray(boardIncluded.cards)) {
       return [];
     }
 
-    const boards = included.boards as Array<{ id: string }>;
-
-    // Check each board for cards with the matching list ID
-    for (const board of boards) {
-      if (typeof board !== "object" || board === null || !("id" in board)) {
-        continue;
-      }
-      const boardId = board.id;
-
-      // Get the board details which includes cards
-      const boardResponse = await plankaRequest(`/api/boards/${boardId}`);
-      if (
-        !boardResponse ||
-        typeof boardResponse !== "object" ||
-        !("included" in boardResponse) ||
-        !boardResponse.included ||
-        typeof boardResponse.included !== "object"
-      ) {
-        continue;
-      }
-
-      const boardIncluded = boardResponse.included;
-      if (!("cards" in boardIncluded) || !Array.isArray(boardIncluded.cards)) {
-        continue;
-      }
-
-      const cards = boardIncluded.cards as PlankaCard[];
-
-      // Filter cards by list ID
-      const matchingCards = cards.filter(
-        (card) => typeof card === "object" && card !== null && "listId" in card && card.listId === listId
-      );
-      if (matchingCards.length > 0) {
-        return matchingCards;
-      }
-    }
-
-    // If we couldn't find any cards for this list ID
-    return [];
+    const cards = boardIncluded.cards as PlankaCard[];
+    return cards.filter(
+      (card) => typeof card === "object" && card !== null && "listId" in card && card.listId === listId
+    );
   } catch (error) {
-    // If all else fails, return an empty array
+    console.error(`Error in getCards for list ${listId}:`, error instanceof Error ? error.message : String(error));
     return [];
   }
 }

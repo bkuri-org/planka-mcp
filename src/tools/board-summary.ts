@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { getBoard } from "../operations/boards.js";
 import { getLists } from "../operations/lists.js";
-import { getCards } from "../operations/cards.js";
+import { plankaRequest } from "../common/utils.js";
 import { getTasks } from "../operations/tasks.js";
 import { getLabels } from "../operations/labels.js";
 import { getComments } from "../operations/comments.js";
@@ -79,10 +79,28 @@ export async function getBoardSummary(params: GetBoardSummaryParams): Promise<Bo
     // Get all lists on the board
     const allLists = await getLists(boardId);
 
-    // Get all cards for each list
+    // Fetch the board once — included.cards contains ALL cards for the board
+    const boardResponse = await plankaRequest(`/api/boards/${boardId}`);
+    const allCards = (
+      boardResponse?.included?.cards && Array.isArray(boardResponse.included.cards)
+        ? boardResponse.included.cards
+        : []) as PlankaCard[];
+
+    // Group cards by listId (O(n) single pass, zero extra API calls)
+    const cardsByListId = new Map<string, PlankaCard[]>();
+    for (const card of allCards) {
+      const existing = cardsByListId.get(card.listId);
+      if (existing) {
+        existing.push(card);
+      } else {
+        cardsByListId.set(card.listId, [card]);
+      }
+    }
+
+    // Build list summaries using pre-grouped cards
     const listsWithCards: ListWithCards[] = await Promise.all(
       allLists.map(async (list) => {
-        const listCards = await getCards(list.id);
+        const listCards = cardsByListId.get(list.id) ?? [];
 
         // Get tasks for each card if requested
         const cardsWithDetails = await Promise.all(
@@ -135,10 +153,10 @@ export async function getBoardSummary(params: GetBoardSummaryParams): Promise<Bo
     const totalCards = listsWithCards.reduce((sum, list) => sum + list.cardCount, 0);
 
     // Find specific lists by name
-    const backlogList = listsWithCards.find((list) => list.name.toLowerCase() === "backlog");
-    const inProgressList = listsWithCards.find((list) => list.name.toLowerCase() === "in progress");
-    const testingList = listsWithCards.find((list) => list.name.toLowerCase() === "testing");
-    const doneList = listsWithCards.find((list) => list.name.toLowerCase() === "done");
+    const backlogList = listsWithCards.find((list) => list.name?.toLowerCase() === "backlog");
+    const inProgressList = listsWithCards.find((list) => list.name?.toLowerCase() === "in progress");
+    const testingList = listsWithCards.find((list) => list.name?.toLowerCase() === "testing");
+    const doneList = listsWithCards.find((list) => list.name?.toLowerCase() === "done");
 
     // Count cards with specific labels
     const urgentCards = listsWithCards
